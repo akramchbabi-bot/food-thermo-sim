@@ -89,7 +89,6 @@ def get_food_properties(X_w, X_p, X_f, X_c, X_a, rho, T=20.0):
 def get_effective_cp(T_celsius, base_cp, X_water, enable_phase_change=True):
     if not enable_phase_change or X_water <= 0.0:
         return base_cp
-    # Apparent specific heat spike around 100°C representing latent heat of vaporization
     gaussian = (1.0 / (DT_BOIL * np.sqrt(np.pi))) * np.exp(-((T_celsius - T_BOIL) / DT_BOIL)**2)
     return base_cp + (X_water * L_V * gaussian)
 
@@ -119,14 +118,13 @@ else:
     ash_val = st.sidebar.slider("Ash / Minerals Content (%)", 0.0, 10.0, 1.0) / 100.0
     rho_val = st.sidebar.number_input("Density ρ (kg/m³)", value=1020.0, step=10.0)
 
-# Physical Phase Change Toggle
 enable_phase_change = st.sidebar.checkbox("Enable Water Evaporation / Phase Change (100°C Plateau)", value=True)
 
 st.sidebar.header("2. Heat Transfer Mode & Boundary")
 mode = st.sidebar.selectbox(
     "Select Surface Heat Mechanism:",
     [
-        "Direct Contact (Pure Surface Conduction)",
+        "Direct Contact (Griddle / Pan Conductance)",
         "Convection (Air / Water / Oil / Steam)",
         "Radiation (Infrared / Broiler)",
         "Combined Convection + Radiation"
@@ -145,8 +143,10 @@ if "Radiation" in mode:
     emissivity = st.sidebar.slider("Surface Emissivity (ε)", 0.1, 1.0, 0.90)
     T_rad = st.sidebar.number_input("Radiant Element Temp (°C)", value=250.0, step=10.0)
 
-if mode == "Direct Contact (Pure Surface Conduction)":
-    T_surface_contact = st.sidebar.number_input("Cooking Surface Temp (°C)", value=150.0, step=5.0)
+if "Direct Contact" in mode:
+    st.sidebar.markdown("**Contact Parameters**")
+    T_surface_contact = st.sidebar.number_input("Cooking Surface / Pan Temp (°C)", value=150.0, step=5.0)
+    h_contact = st.sidebar.slider("Contact Conductance (W/m²·K)", 500, 5000, 2000, help="Heat transfer rate between metal plate and food surface.")
 
 st.sidebar.header("3. Process Parameters")
 thickness_cm = st.sidebar.slider("Food Thickness (cm)", 0.5, 10.0, 2.0)
@@ -178,41 +178,36 @@ if st.button("🚀 Run Heat Transfer Simulation"):
             
             dTdt[i] = alpha_i * (T[i + 1] - 2 * T[i] + T[i - 1]) / (dx ** 2)
             
-        # Boundary Nodes
-        if mode == "Direct Contact (Pure Surface Conduction)":
-            dTdt[0] = 0.0
-            dTdt[-1] = 0.0
-        else:
-            q_surf_left = 0.0
-            q_surf_right = 0.0
+        # Dynamic Surface Boundary Nodes (Energy Balance for ALL modes)
+        q_surf_left = 0.0
+        q_surf_right = 0.0
+        
+        if "Direct Contact" in mode:
+            q_surf_left += h_contact * (T_surface_contact - T[0])
+            q_surf_right += h_contact * (T_surface_contact - T[-1])
             
-            if "Convection" in mode:
-                q_surf_left += h_val * (T_ambient - T[0])
-                q_surf_right += h_val * (T_ambient - T[-1])
-                
-            if "Radiation" in mode:
-                T0_K, TN_K, Trad_K = T[0] + 273.15, T[-1] + 273.15, T_rad + 273.15
-                q_surf_left += emissivity * SIGMA * (Trad_K**4 - T0_K**4)
-                q_surf_right += emissivity * SIGMA * (Trad_K**4 - TN_K**4)
+        if "Convection" in mode:
+            q_surf_left += h_val * (T_ambient - T[0])
+            q_surf_right += h_val * (T_ambient - T[-1])
             
-            k_0, cp_b0, _ = get_food_properties(water_pct, protein_val, fat_val, carbs_val, ash_val, rho_val, T=T[0])
-            cp_e0 = get_effective_cp(T[0], cp_b0, water_pct, enable_phase_change)
-            
-            k_N, cp_bN, _ = get_food_properties(water_pct, protein_val, fat_val, carbs_val, ash_val, rho_val, T=T[-1])
-            cp_eN = get_effective_cp(T[-1], cp_bN, water_pct, enable_phase_change)
-            
-            dTdt[0] = (2.0 / (rho_val * cp_e0 * dx)) * (q_surf_left + k_0 * (T[1] - T[0]) / dx)
-            dTdt[-1] = (2.0 / (rho_val * cp_eN * dx)) * (q_surf_right + k_N * (T[-2] - T[-1]) / dx)
+        if "Radiation" in mode:
+            T0_K, TN_K, Trad_K = T[0] + 273.15, T[-1] + 273.15, T_rad + 273.15
+            q_surf_left += emissivity * SIGMA * (Trad_K**4 - T0_K**4)
+            q_surf_right += emissivity * SIGMA * (Trad_K**4 - TN_K**4)
+        
+        k_0, cp_b0, _ = get_food_properties(water_pct, protein_val, fat_val, carbs_val, ash_val, rho_val, T=T[0])
+        cp_e0 = get_effective_cp(T[0], cp_b0, water_pct, enable_phase_change)
+        
+        k_N, cp_bN, _ = get_food_properties(water_pct, protein_val, fat_val, carbs_val, ash_val, rho_val, T=T[-1])
+        cp_eN = get_effective_cp(T[-1], cp_bN, water_pct, enable_phase_change)
+        
+        dTdt[0] = (2.0 / (rho_val * cp_e0 * dx)) * (q_surf_left + k_0 * (T[1] - T[0]) / dx)
+        dTdt[-1] = (2.0 / (rho_val * cp_eN * dx)) * (q_surf_right + k_N * (T[-2] - T[-1]) / dx)
             
         return dTdt
 
     T0 = np.full(N, T_init)
-    if mode == "Direct Contact (Pure Surface Conduction)":
-        T0[0] = T_surface_contact
-        T0[-1] = T_surface_contact
-
     t_eval = np.linspace(0, t_final, 200)
-    # Use stiff ODE solver 'Radau' to smoothly handle sharp phase-change transitions
     solution = solve_ivp(heat_equation, [0, t_final], T0, t_eval=t_eval, method='Radau')
 
     col1, col2, col3, col4 = st.columns(4)
@@ -240,4 +235,3 @@ if st.button("🚀 Run Heat Transfer Simulation"):
     ax.legend(loc="lower right")
 
     st.pyplot(fig)
-    
