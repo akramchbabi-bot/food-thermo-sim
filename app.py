@@ -14,9 +14,12 @@ L_V = 2.26e6            # Latent Heat of Vaporization of Water (J/kg)
 T_BOIL = 100.0          # Water Boiling Point (°C)
 DT_BOIL = 2.0           # Phase change transition interval half-width (°C)
 
-# Initialize Session State for h slider visibility
+# Initialize Session State for slider visibilities
 if "show_h_slider" not in st.session_state:
     st.session_state.show_h_slider = False
+
+if "show_h_contact_slider" not in st.session_state:
+    st.session_state.show_h_contact_slider = False
 
 # =====================================================================
 # 1. EXPANDED DATABASE OF FOOD COMPOSITIONS
@@ -84,7 +87,7 @@ def get_food_properties(X_w, X_p, X_f, X_c, X_a, rho, T=20.0):
     k_p = 0.17881 + 0.001198 * T - 0.0000027 * (T**2)
     k_f = 0.18071 - 0.000276 * T - 0.0000001 * (T**2)
     k_c = 0.20141 + 0.001387 * T - 0.0000043 * (T**2)
-    k_a = 0.32962 + 0.001401 * T - 0.0000029 * (T**2)
+    k_a = 0.32962 + 0.001401 * T - 0.00000029 * (T**2)
     
     k = (X_w * k_w + X_p * k_p + X_f * k_f + X_c * k_c + X_a * k_a)
     
@@ -143,11 +146,9 @@ if "Convection" in mode:
     if eq_choice != "Custom / Manual Input":
         st.sidebar.caption(f"ℹ️ {eq_data['desc']}")
         
-    # Button to show/hide the h slider
     if st.sidebar.button("⚙️ Tweak Equipment h Value"):
         st.session_state.show_h_slider = not st.session_state.show_h_slider
 
-    # Show slider only if button pressed or if Custom preset chosen
     if st.session_state.show_h_slider or eq_choice == "Custom / Manual Input":
         h_val = st.sidebar.slider(
             "Heat Transfer Coeff. h (W/m²·K)", 
@@ -168,7 +169,20 @@ if "Radiation" in mode:
 if "Direct Contact" in mode:
     st.sidebar.markdown("**Contact Parameters**")
     T_surface_contact = st.sidebar.number_input("Cooking Surface / Pan Temp (°C)", value=150.0, step=5.0)
-    h_contact = st.sidebar.slider("Contact Conductance (W/m²·K)", 500, 5000, 2000, help="Heat transfer rate between metal plate and food surface.")
+    
+    # Toggle button for Contact Conductance Slider
+    if st.sidebar.button("⚙️ Tweak Contact Conductance"):
+        st.session_state.show_h_contact_slider = not st.session_state.show_h_contact_slider
+
+    if st.session_state.show_h_contact_slider:
+        h_contact = st.sidebar.slider(
+            "Contact Conductance (W/m²·K)", 
+            min_value=500, max_value=5000, value=2000, 
+            help="Heat transfer rate between metal plate and food surface."
+        )
+    else:
+        h_contact = 2000.0
+        st.sidebar.info("Using default $h_{\\text{contact}} = 2000\\text{ W/m}^2\\cdot\\text{K}$")
 
 st.sidebar.header("3. Process Parameters")
 thickness_cm = st.sidebar.slider("Food Thickness (cm)", 0.5, 10.0, 2.0)
