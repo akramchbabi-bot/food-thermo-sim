@@ -9,10 +9,7 @@ st.title("🍲 Food Physical Modeling & Heat Conduction Simulator")
 st.write("Simulate temperature distribution across food thickness over time.")
 
 # =====================================================================
-# 1. DATABASE OF FOOD COMPOSITIONS
-# =====================================================================
-# =====================================================================
-# EXPANDED FOOD COMPOSITION DATABASE
+# 1. EXPANDED DATABASE OF FOOD COMPOSITIONS
 # (Values derived from USDA FoodData Central & ASHRAE handbooks)
 # Fractions: water, protein, fat, carbs, ash | Density (rho) in kg/m³
 # =====================================================================
@@ -49,9 +46,8 @@ FOOD_DATABASE = {
     "Cooked Rice": {"water": 0.68, "protein": 0.027, "fat": 0.003, "carbs": 0.28, "ash": 0.005, "rho": 1120.0},
     "Pancake Batter": {"water": 0.55, "protein": 0.06, "fat": 0.05, "carbs": 0.32, "ash": 0.02, "rho": 980.0},
     
-    # --- FALLBACK ---
+    # --- CUSTOM FOOD ---
     "Custom Food": None
-}
 }
 
 # =====================================================================
@@ -88,7 +84,7 @@ if food_choice != "Custom Food":
     data = FOOD_DATABASE[food_choice]
     st.sidebar.success(f"Loaded database values for {food_choice}")
     
-    # Allow user to tweak water percentage if desired
+    # Allow user to tweak water percentage
     water_pct = st.sidebar.slider("Adjust Water Content (%)", 5.0, 95.0, float(data["water"] * 100)) / 100.0
     
     # Normalize remaining fraction proportionately
@@ -102,10 +98,26 @@ if food_choice != "Custom Food":
         data["rho"]
     )
 else:
-    st.sidebar.subheader("Custom Food Parameters")
-    k_val = st.sidebar.number_input("Thermal Conductivity k (W/m·K)", value=0.45, step=0.01)
-    cp_val = st.sidebar.number_input("Specific Heat Cp (J/kg·K)", value=3500.0, step=100.0)
-    rho_val = st.sidebar.number_input("Density ρ (kg/m³)", value=1000.0, step=50.0)
+    st.sidebar.subheader("Custom Food Composition")
+    
+    # Composition Sliders (%)
+    water_pct = st.sidebar.slider("Water Content (%)", 0.0, 100.0, 75.0) / 100.0
+    protein_pct = st.sidebar.slider("Protein Content (%)", 0.0, 100.0, 15.0) / 100.0
+    fat_pct = st.sidebar.slider("Fat Content (%)", 0.0, 100.0, 5.0) / 100.0
+    carbs_pct = st.sidebar.slider("Carbohydrates Content (%)", 0.0, 100.0, 4.0) / 100.0
+    ash_pct = st.sidebar.slider("Ash / Minerals Content (%)", 0.0, 10.0, 1.0) / 100.0
+    
+    rho_val = st.sidebar.number_input("Density ρ (kg/m³)", value=1020.0, step=10.0)
+    
+    # Check if total fraction adds up to 100%
+    total_pct = (water_pct + protein_pct + fat_pct + carbs_pct + ash_pct) * 100
+    if round(total_pct, 1) != 100.0:
+        st.sidebar.warning(f"⚠️ Total composition is **{total_pct:.1f}%**. For best results, components should total 100%.")
+    
+    # Compute thermal properties automatically via Choi & Okos
+    k_val, cp_val, _ = get_food_properties(
+        water_pct, protein_pct, fat_pct, carbs_pct, ash_pct, rho_val
+    )
 
 st.sidebar.header("2. Process Parameters")
 thickness_cm = st.sidebar.slider("Food Thickness (cm)", 0.5, 10.0, 2.0)
@@ -167,3 +179,4 @@ if st.button("🚀 Generate Heating Curves"):
     ax.legend(loc="lower right")
 
     st.pyplot(fig)
+    
