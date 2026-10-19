@@ -11,12 +11,47 @@ st.write("Simulate temperature distribution across food thickness over time.")
 # =====================================================================
 # 1. DATABASE OF FOOD COMPOSITIONS
 # =====================================================================
+# =====================================================================
+# EXPANDED FOOD COMPOSITION DATABASE
+# (Values derived from USDA FoodData Central & ASHRAE handbooks)
+# Fractions: water, protein, fat, carbs, ash | Density (rho) in kg/m³
+# =====================================================================
 FOOD_DATABASE = {
+    # --- MEATS & POULTRY ---
     "Beef Patty (Raw)": {"water": 0.73, "protein": 0.22, "fat": 0.04, "carbs": 0.0, "ash": 0.01, "rho": 1050.0},
+    "Chicken Breast (Raw)": {"water": 0.75, "protein": 0.23, "fat": 0.012, "carbs": 0.0, "ash": 0.01, "rho": 1060.0},
+    "Pork Chop (Raw)": {"water": 0.71, "protein": 0.20, "fat": 0.08, "carbs": 0.0, "ash": 0.01, "rho": 1040.0},
+    "Lamb Meat": {"water": 0.73, "protein": 0.20, "fat": 0.06, "carbs": 0.0, "ash": 0.01, "rho": 1030.0},
+    
+    # --- SEAFOOD ---
+    "Salmon Filet": {"water": 0.68, "protein": 0.20, "fat": 0.11, "carbs": 0.0, "ash": 0.01, "rho": 1040.0},
+    "Cod Filet": {"water": 0.81, "protein": 0.18, "fat": 0.007, "carbs": 0.0, "ash": 0.012, "rho": 1050.0},
+    "Shrimp": {"water": 0.78, "protein": 0.20, "fat": 0.01, "carbs": 0.0, "ash": 0.01, "rho": 1080.0},
+    
+    # --- VEGETABLES & LEGUMES ---
     "Potato (Raw)": {"water": 0.79, "protein": 0.02, "fat": 0.001, "carbs": 0.17, "ash": 0.01, "rho": 1070.0},
+    "Carrot": {"water": 0.88, "protein": 0.009, "fat": 0.002, "carbs": 0.10, "ash": 0.01, "rho": 1040.0},
+    "Broccoli": {"water": 0.89, "protein": 0.028, "fat": 0.004, "carbs": 0.07, "ash": 0.008, "rho": 1030.0},
+    "Tomato": {"water": 0.94, "protein": 0.009, "fat": 0.002, "carbs": 0.039, "ash": 0.005, "rho": 1010.0},
+    
+    # --- FRUITS ---
     "Apple": {"water": 0.85, "protein": 0.003, "fat": 0.002, "carbs": 0.14, "ash": 0.003, "rho": 840.0},
+    "Banana": {"water": 0.75, "protein": 0.011, "fat": 0.003, "carbs": 0.23, "ash": 0.008, "rho": 970.0},
+    "Strawberry": {"water": 0.91, "protein": 0.007, "fat": 0.003, "carbs": 0.077, "ash": 0.004, "rho": 1020.0},
+    
+    # --- DAIRY & EGGS ---
+    "Whole Milk": {"water": 0.88, "protein": 0.032, "fat": 0.032, "carbs": 0.048, "ash": 0.007, "rho": 1030.0},
+    "Cheddar Cheese": {"water": 0.37, "protein": 0.25, "fat": 0.33, "carbs": 0.013, "ash": 0.037, "rho": 1080.0},
+    "Whole Egg (Raw)": {"water": 0.76, "protein": 0.13, "fat": 0.10, "carbs": 0.01, "ash": 0.01, "rho": 1035.0},
+    
+    # --- GRAINS & BAKERY ---
     "Bread Dough": {"water": 0.40, "protein": 0.09, "fat": 0.03, "carbs": 0.46, "ash": 0.02, "rho": 600.0},
+    "Cooked Rice": {"water": 0.68, "protein": 0.027, "fat": 0.003, "carbs": 0.28, "ash": 0.005, "rho": 1120.0},
+    "Pancake Batter": {"water": 0.55, "protein": 0.06, "fat": 0.05, "carbs": 0.32, "ash": 0.02, "rho": 980.0},
+    
+    # --- FALLBACK ---
     "Custom Food": None
+}
 }
 
 # =====================================================================
