@@ -14,6 +14,10 @@ L_V = 2.26e6            # Latent Heat of Vaporization of Water (J/kg)
 T_BOIL = 100.0          # Water Boiling Point (°C)
 DT_BOIL = 2.0           # Phase change transition interval half-width (°C)
 
+# Initialize Session State for h slider visibility
+if "show_h_slider" not in st.session_state:
+    st.session_state.show_h_slider = False
+
 # =====================================================================
 # 1. EXPANDED DATABASE OF FOOD COMPOSITIONS
 # =====================================================================
@@ -135,7 +139,25 @@ if "Convection" in mode:
     st.sidebar.markdown("**Industrial Equipment Preset**")
     eq_choice = st.sidebar.selectbox("Choose Equipment Preset:", list(EQUIPMENT_PRESETS.keys()))
     eq_data = EQUIPMENT_PRESETS[eq_choice]
-    h_val = st.sidebar.slider("Heat Transfer Coeff. h (W/m²·K)", 5, 2000, int(eq_data["h"]))
+    
+    if eq_choice != "Custom / Manual Input":
+        st.sidebar.caption(f"ℹ️ {eq_data['desc']}")
+        
+    # Button to show/hide the h slider
+    if st.sidebar.button("⚙️ Tweak Equipment h Value"):
+        st.session_state.show_h_slider = not st.session_state.show_h_slider
+
+    # Show slider only if button pressed or if Custom preset chosen
+    if st.session_state.show_h_slider or eq_choice == "Custom / Manual Input":
+        h_val = st.sidebar.slider(
+            "Heat Transfer Coeff. h (W/m²·K)", 
+            min_value=5, max_value=2000, value=int(eq_data["h"]),
+            help="Still Air: 5-15 | Forced Air: 20-50 | Air Impingement: 50-180 | Frying Oil: 250-600 | Steam: 1000+"
+        )
+    else:
+        h_val = float(eq_data["h"])
+        st.sidebar.info(f"Using default $h = {int(h_val)}\\text{{ W/m}}^2\\cdot\\text{{K}}$ for {eq_choice}")
+
     T_ambient = st.sidebar.number_input("Fluid / Medium Temp (°C)", value=float(eq_data["temp"]), step=5.0)
 
 if "Radiation" in mode:
@@ -178,7 +200,7 @@ if st.button("🚀 Run Heat Transfer Simulation"):
             
             dTdt[i] = alpha_i * (T[i + 1] - 2 * T[i] + T[i - 1]) / (dx ** 2)
             
-        # Dynamic Surface Boundary Nodes (Energy Balance for ALL modes)
+        # Dynamic Surface Boundary Nodes
         q_surf_left = 0.0
         q_surf_right = 0.0
         
