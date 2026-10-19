@@ -98,7 +98,6 @@ def get_effective_cp(T_celsius, base_cp, X_water, enable_phase_change=True):
     gaussian = (1.0 / (DT_BOIL * np.sqrt(np.pi))) * np.exp(-((T_celsius - T_BOIL) / DT_BOIL)**2)
     return base_cp + (X_water * L_V * gaussian)
 
-# Function to generate 2D Pixel Art Cross-Section Grid
 def generate_pixel_art(T_profile, x_array, grid_size=33):
     grid = np.full((grid_size, grid_size), np.nan)
     center = (grid_size - 1) / 2.0
@@ -109,11 +108,8 @@ def generate_pixel_art(T_profile, x_array, grid_size=33):
         for c in range(grid_size):
             dist = np.sqrt((r - center)**2 + (c - center)**2)
             if dist <= radius_px:
-                # Distance ratio: 1.0 at surface, 0.0 at center
                 norm_dist = dist / radius_px
                 depth_cm = (1.0 - norm_dist) * (x_array[-1] * 100 / 2.0)
-                
-                # Interpolate local temperature based on distance from center
                 grid[r, c] = np.interp(depth_cm, x_array[:half_N+1] * 100, T_profile[:half_N+1])
     return grid
 
@@ -253,6 +249,7 @@ if st.button("🚀 Run Heat Transfer Simulation"):
 
     st.session_state.solution = solution
     st.session_state.x_array = x
+    st.session_state.T_init = T_init
     st.session_state.food_choice = food_choice
     st.session_state.enable_phase_change = enable_phase_change
     st.session_state.k_init = k_init
@@ -266,8 +263,9 @@ if st.button("🚀 Run Heat Transfer Simulation"):
 if "solution" in st.session_state:
     solution = st.session_state.solution
     x = st.session_state.x_array
+    N = len(x)
+    T_init_val = st.session_state.get("T_init", 5.0)
     
-    # Display Key Metrics
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Thermal Conductivity (k)", f"{st.session_state.k_init:.3f} W/m·K")
     col2.metric("Sensible Specific Heat (Cp)", f"{st.session_state.cp_base_init:.1f} J/kg·K")
@@ -286,17 +284,14 @@ if "solution" in st.session_state:
         step=float(time_min[1] - time_min[0])
     )
 
-    # Find index closest to slider time
     time_idx = np.argmin(np.abs(time_min - selected_time))
     current_temps = solution.y[:, time_idx]
 
-    # Metrics at selected time stamp
     m_col1, m_col2, m_col3 = st.columns(3)
     m_col1.metric("Selected Time", f"{selected_time:.2f} min")
     m_col2.metric("Surface Temp", f"{current_temps[0]:.1f} °C")
     m_col3.metric("Core Center Temp", f"{current_temps[N//2]:.1f} °C")
 
-    # Plot Layout: 1D Graph on Left, Pixel Art Visualizer on Right
     plot_col1, plot_col2 = st.columns([1.2, 1])
 
     with plot_col1:
@@ -322,14 +317,13 @@ if "solution" in st.session_state:
         fig2, ax2 = plt.subplots(figsize=(6, 5))
         pixel_grid = generate_pixel_art(current_temps, x, grid_size=33)
 
-        # Custom Temperature Colormap (Blue -> Green -> Yellow -> Orange -> Red)
         cmap = mcolors.LinearSegmentedColormap.from_list(
             "food_temp", ["#1e88e5", "#4caf50", "#ffeb3b", "#ff9800", "#f44336", "#b71c1c"]
         )
-        cmap.set_bad(color="#0e1117")  # Dark background for pixels outside food boundary
+        cmap.set_bad(color="#0e1117")
 
         max_temp_bound = max(150.0, float(np.max(solution.y)))
-        im = ax2.imshow(pixel_grid, cmap=cmap, vmin=T_init, vmax=max_temp_bound, interpolation='nearest')
+        im = ax2.imshow(pixel_grid, cmap=cmap, vmin=T_init_val, vmax=max_temp_bound, interpolation='nearest')
         
         ax2.set_title(f"🔴 Pixel Art Cross-Section at t = {selected_time:.2f} min", fontsize=11)
         ax2.axis('off')
