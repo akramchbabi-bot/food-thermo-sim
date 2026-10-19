@@ -2,6 +2,7 @@ import streamlit as st
 import numpy as np
 from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 
 st.set_page_config(page_title="Food Thermodynamics Simulator", layout="wide")
 
@@ -14,15 +15,14 @@ L_V = 2.26e6            # Latent Heat of Vaporization of Water (J/kg)
 T_BOIL = 100.0          # Water Boiling Point (°C)
 DT_BOIL = 2.0           # Phase change transition interval half-width (°C)
 
-# Initialize Session State for slider visibilities
+# Session State for slider visibilities
 if "show_h_slider" not in st.session_state:
     st.session_state.show_h_slider = False
-
 if "show_h_contact_slider" not in st.session_state:
     st.session_state.show_h_contact_slider = False
 
 # =====================================================================
-# 1. EXPANDED DATABASE OF FOOD COMPOSITIONS
+# 1. DATABASE OF FOOD COMPOSITIONS
 # =====================================================================
 FOOD_DATABASE = {
     # --- MEATS & POULTRY ---
@@ -72,7 +72,7 @@ EQUIPMENT_PRESETS = {
 }
 
 # =====================================================================
-# 2. CHOI & OKOS & PHASE CHANGE CALCULATOR
+# 2. THERMAL PROPERTY & PHASE CHANGE CALCULATORS
 # =====================================================================
 def get_food_properties(X_w, X_p, X_f, X_c, X_a, rho, T=20.0):
     cp_w = 4176.2 - 0.0908 * T + 0.0054 * (T**2)
@@ -90,7 +90,6 @@ def get_food_properties(X_w, X_p, X_f, X_c, X_a, rho, T=20.0):
     k_a = 0.32962 + 0.001401 * T - 0.00000029 * (T**2)
     
     k = (X_w * k_w + X_p * k_p + X_f * k_f + X_c * k_c + X_a * k_a)
-    
     return k, cp_base, rho
 
 def get_effective_cp(T_celsius, base_cp, X_water, enable_phase_change=True):
@@ -98,6 +97,25 @@ def get_effective_cp(T_celsius, base_cp, X_water, enable_phase_change=True):
         return base_cp
     gaussian = (1.0 / (DT_BOIL * np.sqrt(np.pi))) * np.exp(-((T_celsius - T_BOIL) / DT_BOIL)**2)
     return base_cp + (X_water * L_V * gaussian)
+
+# Function to generate 2D Pixel Art Cross-Section Grid
+def generate_pixel_art(T_profile, x_array, grid_size=33):
+    grid = np.full((grid_size, grid_size), np.nan)
+    center = (grid_size - 1) / 2.0
+    radius_px = grid_size / 2.0 - 1.0
+    half_N = len(x_array) // 2
+
+    for r in range(grid_size):
+        for c in range(grid_size):
+            dist = np.sqrt((r - center)**2 + (c - center)**2)
+            if dist <= radius_px:
+                # Distance ratio: 1.0 at surface, 0.0 at center
+                norm_dist = dist / radius_px
+                depth_cm = (1.0 - norm_dist) * (x_array[-1] * 100 / 2.0)
+                
+                # Interpolate local temperature based on distance from center
+                grid[r, c] = np.interp(depth_cm, x_array[:half_N+1] * 100, T_profile[:half_N+1])
+    return grid
 
 # =====================================================================
 # 3. SIDEBAR CONTROLS & INPUTS
@@ -150,11 +168,7 @@ if "Convection" in mode:
         st.session_state.show_h_slider = not st.session_state.show_h_slider
 
     if st.session_state.show_h_slider or eq_choice == "Custom / Manual Input":
-        h_val = st.sidebar.slider(
-            "Heat Transfer Coeff. h (W/m²·K)", 
-            min_value=5, max_value=2000, value=int(eq_data["h"]),
-            help="Still Air: 5-15 | Forced Air: 20-50 | Air Impingement: 50-180 | Frying Oil: 250-600 | Steam: 1000+"
-        )
+        h_val = st.sidebar.slider("Heat Transfer Coeff. h (W/m²·K)", 5, 2000, int(eq_data["h"]))
     else:
         h_val = float(eq_data["h"])
         st.sidebar.info(f"Using default $h = {int(h_val)}\\text{{ W/m}}^2\\cdot\\text{{K}}$ for {eq_choice}")
@@ -170,16 +184,11 @@ if "Direct Contact" in mode:
     st.sidebar.markdown("**Contact Parameters**")
     T_surface_contact = st.sidebar.number_input("Cooking Surface / Pan Temp (°C)", value=150.0, step=5.0)
     
-    # Toggle button for Contact Conductance Slider
     if st.sidebar.button("⚙️ Tweak Contact Conductance"):
         st.session_state.show_h_contact_slider = not st.session_state.show_h_contact_slider
 
     if st.session_state.show_h_contact_slider:
-        h_contact = st.sidebar.slider(
-            "Contact Conductance (W/m²·K)", 
-            min_value=500, max_value=5000, value=2000, 
-            help="Heat transfer rate between metal plate and food surface."
-        )
+        h_contact = st.sidebar.slider("Contact Conductance (W/m²·K)", 500, 5000, 2000)
     else:
         h_contact = 2000.0
         st.sidebar.info("Using default $h_{\\text{contact}} = 2000\\text{ W/m}^2\\cdot\\text{K}$")
@@ -191,7 +200,7 @@ T_init = st.sidebar.number_input("Initial Food Temp (°C)", value=5.0, step=1.0)
 cooking_time_min = st.sidebar.slider("Simulation Time (minutes)", 1, 60, 10)
 
 # =====================================================================
-# 4. SOLVER & PDE DISCRETIZATION
+# 4. SOLVER & INTERACTIVE ANIMATION VISUALIZER
 # =====================================================================
 if st.button("🚀 Run Heat Transfer Simulation"):
     k_init, cp_base_init, _ = get_food_properties(water_pct, protein_val, fat_val, carbs_val, ash_val, rho_val, T=T_init)
@@ -205,16 +214,12 @@ if st.button("🚀 Run Heat Transfer Simulation"):
     
     def heat_equation(t, T):
         dTdt = np.zeros_like(T)
-        
-        # Interior Nodes
         for i in range(1, N - 1):
             k_i, cp_base_i, _ = get_food_properties(water_pct, protein_val, fat_val, carbs_val, ash_val, rho_val, T=T[i])
             cp_eff_i = get_effective_cp(T[i], cp_base_i, water_pct, enable_phase_change)
             alpha_i = k_i / (rho_val * cp_eff_i)
-            
             dTdt[i] = alpha_i * (T[i + 1] - 2 * T[i] + T[i - 1]) / (dx ** 2)
             
-        # Dynamic Surface Boundary Nodes
         q_surf_left = 0.0
         q_surf_right = 0.0
         
@@ -246,28 +251,89 @@ if st.button("🚀 Run Heat Transfer Simulation"):
     t_eval = np.linspace(0, t_final, 200)
     solution = solve_ivp(heat_equation, [0, t_final], T0, t_eval=t_eval, method='Radau')
 
+    st.session_state.solution = solution
+    st.session_state.x_array = x
+    st.session_state.food_choice = food_choice
+    st.session_state.enable_phase_change = enable_phase_change
+    st.session_state.k_init = k_init
+    st.session_state.cp_base_init = cp_base_init
+    st.session_state.rho_val = rho_val
+    st.session_state.alpha_init = alpha_init
+
+# =====================================================================
+# DISPLAY RESULTS & PIXEL ART ANIMATION CONTROLS
+# =====================================================================
+if "solution" in st.session_state:
+    solution = st.session_state.solution
+    x = st.session_state.x_array
+    
+    # Display Key Metrics
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Thermal Conductivity (k)", f"{k_init:.3f} W/m·K")
-    col2.metric("Sensible Specific Heat (Cp)", f"{cp_base_init:.1f} J/kg·K")
-    col3.metric("Density (ρ)", f"{rho_val:.0f} kg/m³")
-    col4.metric("Thermal Diffusivity (α)", f"{alpha_init:.2e} m²/s")
+    col1.metric("Thermal Conductivity (k)", f"{st.session_state.k_init:.3f} W/m·K")
+    col2.metric("Sensible Specific Heat (Cp)", f"{st.session_state.cp_base_init:.1f} J/kg·K")
+    col3.metric("Density (ρ)", f"{st.session_state.rho_val:.0f} kg/m³")
+    col4.metric("Thermal Diffusivity (α)", f"{st.session_state.alpha_init:.2e} m²/s")
 
-    fig, ax = plt.subplots(figsize=(10, 5))
+    st.divider()
+    st.subheader("⏱️ Temperature Penetration & Pixel Art Animator")
+
     time_min = solution.t / 60.0
+    selected_time = st.slider(
+        "Move slider to inspect temperature penetration over time:", 
+        min_value=0.0, 
+        max_value=float(time_min[-1]), 
+        value=float(time_min[-1] / 2.0), 
+        step=float(time_min[1] - time_min[0])
+    )
 
-    depth_indices = [0, N//8, N//4, 3*N//8, N//2]
-    for idx in depth_indices:
-        pos_cm = x[idx] * 100
-        label_text = f"Surface ({pos_cm:.2f} cm)" if idx == 0 else (
-            f"Center ({pos_cm:.2f} cm)" if idx == N//2 else f"Depth {pos_cm:.2f} cm"
+    # Find index closest to slider time
+    time_idx = np.argmin(np.abs(time_min - selected_time))
+    current_temps = solution.y[:, time_idx]
+
+    # Metrics at selected time stamp
+    m_col1, m_col2, m_col3 = st.columns(3)
+    m_col1.metric("Selected Time", f"{selected_time:.2f} min")
+    m_col2.metric("Surface Temp", f"{current_temps[0]:.1f} °C")
+    m_col3.metric("Core Center Temp", f"{current_temps[N//2]:.1f} °C")
+
+    # Plot Layout: 1D Graph on Left, Pixel Art Visualizer on Right
+    plot_col1, plot_col2 = st.columns([1.2, 1])
+
+    with plot_col1:
+        fig1, ax1 = plt.subplots(figsize=(7, 5))
+        depth_indices = [0, N//8, N//4, 3*N//8, N//2]
+        for idx in depth_indices:
+            pos_cm = x[idx] * 100
+            label_text = f"Surface ({pos_cm:.2f} cm)" if idx == 0 else (
+                f"Center ({pos_cm:.2f} cm)" if idx == N//2 else f"Depth {pos_cm:.2f} cm"
+            )
+            ax1.plot(time_min, solution.y[idx, :], label=label_text, linewidth=2)
+
+        ax1.axvline(selected_time, color='black', linestyle='--', linewidth=2, label="Current Timestamp")
+        ax1.axhline(100, color='red', linestyle=':', alpha=0.7, label="Boiling Point (100°C)")
+        ax1.set_xlabel("Time (minutes)", fontsize=10)
+        ax1.set_ylabel("Temperature (°C)", fontsize=10)
+        ax1.set_title(f"Thermal Profile Curves", fontsize=11)
+        ax1.grid(True, linestyle="--", alpha=0.5)
+        ax1.legend(loc="lower right", fontsize=8)
+        st.pyplot(fig1)
+
+    with plot_col2:
+        fig2, ax2 = plt.subplots(figsize=(6, 5))
+        pixel_grid = generate_pixel_art(current_temps, x, grid_size=33)
+
+        # Custom Temperature Colormap (Blue -> Green -> Yellow -> Orange -> Red)
+        cmap = mcolors.LinearSegmentedColormap.from_list(
+            "food_temp", ["#1e88e5", "#4caf50", "#ffeb3b", "#ff9800", "#f44336", "#b71c1c"]
         )
-        ax.plot(time_min, solution.y[idx, :], label=label_text, linewidth=2)
+        cmap.set_bad(color="#0e1117")  # Dark background for pixels outside food boundary
 
-    ax.axhline(100, color='red', linestyle=':', alpha=0.7, label="Water Boiling Point (100°C)")
-    ax.set_xlabel("Time (minutes)", fontsize=11)
-    ax.set_ylabel("Temperature (°C)", fontsize=11)
-    ax.set_title(f"Temperature Evolution in {food_choice} (Phase Change: {'Enabled' if enable_phase_change else 'Disabled'})", fontsize=13)
-    ax.grid(True, linestyle="--", alpha=0.6)
-    ax.legend(loc="lower right")
-
-    st.pyplot(fig)
+        max_temp_bound = max(150.0, float(np.max(solution.y)))
+        im = ax2.imshow(pixel_grid, cmap=cmap, vmin=T_init, vmax=max_temp_bound, interpolation='nearest')
+        
+        ax2.set_title(f"🔴 Pixel Art Cross-Section at t = {selected_time:.2f} min", fontsize=11)
+        ax2.axis('off')
+        
+        cbar = fig2.colorbar(im, ax=ax2, fraction=0.046, pad=0.04)
+        cbar.set_label("Temperature (°C)", fontsize=9)
+        st.pyplot(fig2)
