@@ -324,7 +324,7 @@ if app_mode == "1. Transient Heat Transfer & Penetration":
 # =====================================================================
 elif app_mode == "2. Evaporation & Concentration Thermodynamics":
     st.title("⚗️ Evaporation & Product Concentration Thermodynamics")
-    st.write("Model liquid mass reduction, vapor accumulation, boiling point changes, and target concentration times.")
+    st.write("Model liquid mass reduction, vapor accumulation, boiling point changes, and thermal energy usage.")
 
     st.sidebar.header("1. Fluid / Mixture Selection")
     fluid_type = st.sidebar.selectbox(
@@ -367,11 +367,33 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
     else:
         evap_time_min = st.sidebar.slider("Evaporation Simulation Time (minutes)", 1, 120, 30)
 
-    st.sidebar.header("3. Evaporation Pot / Vessel Settings")
+    st.sidebar.header("3. Evaporation Pot & Safety Valve Setup")
     vessel_type = st.sidebar.selectbox("Vessel Operating Mode:", ["Open Pot (Constant Atmospheric Pressure)", "Closed Sealed Pot (Variable Pressure Buildup)"])
     pot_volume = st.sidebar.number_input("Total Pot Vessel Volume (Liters)", value=200.0, step=10.0) / 1000.0
     initial_pressure_atm = st.sidebar.number_input("Initial Vessel Pressure (atm)", value=1.0, step=0.1)
-    heating_power_kw = st.sidebar.slider("Thermal Heating Power Input (kW)", 1.0, 100.0, 15.0)
+
+    enable_prv = False
+    prv_threshold_atm = 2.5
+    if vessel_type == "Closed Sealed Pot (Variable Pressure Buildup)":
+        enable_prv = st.sidebar.checkbox("Enable Pressure Relief Valve (PRV)", value=True)
+        if enable_prv:
+            prv_threshold_atm = st.sidebar.number_input("PRV Setpoint Threshold (atm)", value=2.5, min_value=1.1, max_value=10.0, step=0.1)
+
+    heating_mode = st.sidebar.radio(
+        "Heating Energy Input Model:",
+        [
+            "Pressure-Coupled Driving Force (Q = U·A·ΔT)",
+            "Fixed Heating Power Input (kW)"
+        ]
+    )
+
+    if heating_mode == "Pressure-Coupled Driving Force (Q = U·A·ΔT)":
+        T_heating = st.sidebar.number_input("Heating Jacket / Surface Temp (°C)", value=140.0, step=5.0)
+        U_heating = st.sidebar.slider("Jacket Heat Transfer Coeff. U (W/m²·K)", 100, 3000, 1200)
+        A_heating = st.sidebar.slider("Heating Surface Area A (m²)", 0.1, 5.0, 1.2)
+        st.sidebar.caption("ℹ️ As pressure rises, boiling point T_b increases. ΔT = (T_heating - T_b) collapses, slowing boiling speed.")
+    else:
+        heating_power_kw = st.sidebar.slider("Thermal Heating Power Input (kW)", 1.0, 100.0, 15.0)
 
     st.sidebar.header("4. Condenser Settings (Optional)")
     enable_condenser = st.sidebar.checkbox("Enable Overhead Condenser Surface", value=True)
@@ -381,7 +403,7 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
         h_condenser = st.sidebar.slider("Condensation Heat Transfer Coeff. (W/m²·K)", 100, 3000, 1000)
 
     if st.button("🧪 Run Evaporation & Concentration Model"):
-        with st.spinner("⚡ Computing mass balance & phase thermodynamics..."):
+        with st.spinner("⚡ Computing mass balance, energy usage & PRV thermodynamics..."):
             if calc_goal == "Find Time to Reach Target Concentration":
                 m_solv_target = m_other_0 * ((100.0 / target_conc_pct) - 1.0)
                 max_sec = max_timeout_min * 60.0
@@ -393,7 +415,7 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
                 dt = max_sec / 300.0
                 time_limit_steps = 300
 
-            t_list, m_solv_list, conc_list, press_list, boil_list = [], [], [], [], []
+            t_list, m_solv_list, conc_list, press_list, boil_list, energy_list = [], [], [], [], [], []
 
             m_curr = m_volatile_0
             density_liq = 1000.0 if solvent_key == "Water" else 789.0
@@ -409,14 +431,28 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
 
             target_reached = False
             final_time_sec = 0.0
+            cum_energy_kwh = 0.0
 
             for step in range(time_limit_steps):
                 current_time_sec = step * dt
                 
+                # Antoine equation for current boiling point at local pressure
                 T_b = (antoine_params["B"] / (antoine_params["A"] - np.log10(max(1.0, P_curr_kPa)))) - antoine_params["C"]
 
-                evap_rate = (heating_power_kw * 1000.0) / L_v if m_curr > 0.001 else 0.0
+                # Calculate Gross Heat Flux and Boiling Rate
+                if heating_mode == "Pressure-Coupled Driving Force (Q = U·A·ΔT)":
+                    delta_T = max(0.0, T_heating - T_b)
+                    Q_gross_watts = U_heating * A_heating * delta_T
+                else:
+                    Q_gross_watts = heating_power_kw * 1000.0
 
+                evap_rate = Q_gross_watts / L_v if m_curr > 0.001 else 0.0
+
+                # Cumulative Thermal Energy Tracking (kWh)
+                step_kwh = (Q_gross_watts / 1000.0) * (dt / 3600.0)
+                cum_energy_kwh += step_kwh
+
+                # Calculate Condensation Rate
                 cond_rate = 0.0
                 if enable_condenser and evap_rate > 0:
                     q_cond = h_condenser * condenser_area * max(0.0, T_b - T_condenser)
@@ -428,6 +464,7 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
                 curr_total = m_curr + m_other_0
                 curr_conc = (m_other_0 / curr_total) * 100.0 if curr_total > 0 else 100.0
 
+                # Pressure & PRV Clamping Logic
                 if vessel_type == "Open Pot (Constant Atmospheric Pressure)":
                     P_curr_kPa = initial_pressure_atm * 101.325
                 else:
@@ -435,11 +472,17 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
                     n_vapor += dn_vapor
                     P_curr_kPa = (n_vapor * R_GAS * (T_b + 273.15)) / (v_headspace * 1000.0)
 
+                    # PRV Activation Clamping
+                    if enable_prv and (P_curr_kPa > prv_threshold_atm * 101.325):
+                        P_curr_kPa = prv_threshold_atm * 101.325
+                        n_vapor = (P_curr_kPa * 1000.0 * v_headspace) / (R_GAS * (T_b + 273.15))
+
                 t_list.append(current_time_sec / 60.0)
                 m_solv_list.append(m_curr)
                 conc_list.append(curr_conc)
                 press_list.append(P_curr_kPa)
                 boil_list.append(T_b)
+                energy_list.append(cum_energy_kwh)
 
                 if calc_goal == "Find Time to Reach Target Concentration" and m_curr <= m_solv_target:
                     target_reached = True
@@ -450,12 +493,17 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
             st.session_state.concentration = np.array(conc_list)
             st.session_state.pressure_kPa = np.array(press_list)
             st.session_state.boiling_temp = np.array(boil_list)
+            st.session_state.energy_kwh = np.array(energy_list)
             st.session_state.time_min = np.array(t_list)
             st.session_state.solvent_key = solvent_key
             st.session_state.calc_goal = calc_goal
             st.session_state.target_reached = target_reached
             st.session_state.final_time_min = final_time_sec / 60.0
             st.session_state.target_conc_pct = target_conc_pct if calc_goal == "Find Time to Reach Target Concentration" else 0.0
+            st.session_state.enable_prv = enable_prv
+            st.session_state.prv_threshold_atm = prv_threshold_atm
+            st.session_state.vessel_type = vessel_type
+            st.session_state.m_volatile_0 = m_volatile_0
 
     if "m_solv" in st.session_state and st.session_state.get("m_solv") is not None:
         time_min = st.session_state.get("time_min")
@@ -463,20 +511,27 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
         concentration = st.session_state.get("concentration")
         pressure_kPa = st.session_state.get("pressure_kPa")
         boiling_temp = st.session_state.get("boiling_temp")
+        energy_kwh = st.session_state.get("energy_kwh")
         solv_key = st.session_state.get("solvent_key", "Water")
         current_calc_goal = st.session_state.get("calc_goal", "Simulate Fixed Time Duration")
+
+        evaporated_kg = st.session_state.get("m_volatile_0", m_solv[0]) - m_solv[-1]
+        specific_energy = (energy_kwh[-1] / evaporated_kg) if evaporated_kg > 0 else 0.0
 
         if current_calc_goal == "Find Time to Reach Target Concentration":
             if st.session_state.get("target_reached", False):
                 st.success(f"🎯 **Target Concentration of {st.session_state.get('target_conc_pct', 0.0):.1f}% reached in {st.session_state.get('final_time_min', 0.0):.2f} minutes!**")
             else:
-                st.error(f"⚠️ Target concentration was not reached within the safety limit ({time_min[-1]:.0f} min). Try increasing heating power.")
+                st.error(f"⚠️ Target concentration was not reached within the safety limit ({time_min[-1]:.0f} min). Try increasing heating jacket temperature or surface area.")
 
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Final Concentration", f"{concentration[-1]:.1f} %")
         c2.metric(f"Remaining {solv_key}", f"{m_solv[-1]:.1f} kg")
-        c3.metric("Final Vessel Pressure", f"{pressure_kPa[-1]/101.325:.2f} atm")
-        c4.metric("Boiling Point at Pressure", f"{boiling_temp[-1]:.1f} °C")
+        c3.metric("Final Pressure", f"{pressure_kPa[-1]/101.325:.2f} atm")
+        c4.metric("Boiling Temp", f"{boiling_temp[-1]:.1f} °C")
+        c5.metric("Thermal Energy Used", f"{energy_kwh[-1]:.2f} kWh", help=f"Specific Energy: {specific_energy:.3f} kWh/kg evaporated")
+
+        st.caption(f"⚡ **Energy Efficiency Metric:** **{specific_energy:.3f} kWh** per kg of {solv_key} evaporated ({evaporated_kg:.1f} kg evaporated total).")
 
         st.divider()
         res_col1, res_col2 = st.columns(2)
@@ -509,6 +564,10 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
             fig2, ax2 = plt.subplots(figsize=(6, 4))
             press_atm = pressure_kPa / 101.325
             ax2.plot(time_min, press_atm, color="crimson", linewidth=2.5, label="Vessel Pressure (atm)")
+
+            if st.session_state.get("vessel_type") == "Closed Sealed Pot (Variable Pressure Buildup)" and st.session_state.get("enable_prv", False):
+                ax2.axhline(st.session_state.get("prv_threshold_atm", 2.5), color="darkred", linestyle=":", linewidth=2, label=f"PRV Limit ({st.session_state.get('prv_threshold_atm', 2.5):.1f} atm)")
+
             ax2.set_xlabel("Time (minutes)")
             ax2.set_ylabel("Pressure (atm)", color="crimson")
             ax2.grid(True, linestyle="--", alpha=0.5)
@@ -518,11 +577,12 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
             ax2.set_ylim(bottom=0, top=max_press_val)
 
             ax2_twin = ax2.twinx()
-            ax2_twin.plot(time_min, boiling_temp, color="orange", linestyle="-.", linewidth=2, label="Boiling Point (°C)")
-            ax2_twin.set_ylabel("Liquid Boiling Temp (°C)", color="orange")
+            ax2_twin.plot(time_min, energy_kwh, color="purple", linestyle="-.", linewidth=2, label="Cumulative Heat (kWh)")
+            ax2_twin.set_ylabel("Thermal Energy Consumed (kWh)", color="purple")
             
-            max_boil_val = max(110.0, float(np.max(boiling_temp)) * 1.05)
-            ax2_twin.set_ylim(bottom=0, top=max_boil_val)
+            max_energy_val = max(1.0, float(np.max(energy_kwh)) * 1.05)
+            ax2_twin.set_ylim(bottom=0, top=max_energy_val)
 
-            ax2.set_title("Vessel Pressure & Shifted Boiling Point", fontsize=11)
+            ax2.set_title("Vessel Pressure & Cumulative Energy (kWh)", fontsize=11)
+            ax2.legend(loc="upper left")
             st.pyplot(fig2)
