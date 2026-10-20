@@ -320,7 +320,7 @@ if app_mode == "1. Transient Heat Transfer & Penetration":
 # =====================================================================
 elif app_mode == "2. Evaporation & Concentration Thermodynamics":
     st.title("⚗️ Evaporation & Product Concentration Thermodynamics")
-    st.write("Model liquid mass reduction, vapor accumulation, boiling point changes, and condensation dynamics.")
+    st.write("Model liquid mass reduction, vapor accumulation, boiling point changes, and target concentration times.")
 
     st.sidebar.header("1. Fluid / Mixture Selection")
     fluid_type = st.sidebar.selectbox(
@@ -342,89 +342,121 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
         total_initial_mass = m_volatile_0 + m_other_0
         volatile_pct = m_volatile_0 / total_initial_mass if total_initial_mass > 0 else 0
 
-    st.sidebar.header("2. Evaporation Pot / Vessel Settings")
+    initial_conc_pct = (m_other_0 / total_initial_mass) * 100.0 if total_initial_mass > 0 else 0.0
+    st.sidebar.info(f"💡 Initial Concentration: **{initial_conc_pct:.1f}% Non-Volatiles**")
+
+    st.sidebar.header("2. Calculation Goal")
+    calc_goal = st.sidebar.radio(
+        "Simulation Goal:",
+        ["Find Time to Reach Target Concentration", "Simulate Fixed Time Duration"]
+    )
+
+    if calc_goal == "Find Time to Reach Target Concentration":
+        min_target = min(98.0, float(np.ceil(initial_conc_pct + 1.0)))
+        target_conc_pct = st.sidebar.slider(
+            "Target Product Concentration (%)",
+            min_value=min_target,
+            max_value=99.0,
+            value=min(95.0, float(np.ceil(initial_conc_pct + 20.0)))
+        )
+        max_timeout_min = st.sidebar.number_input("Maximum Safety Timeout (minutes)", value=180, step=15)
+    else:
+        evap_time_min = st.sidebar.slider("Evaporation Simulation Time (minutes)", 1, 120, 30)
+
+    st.sidebar.header("3. Evaporation Pot / Vessel Settings")
     vessel_type = st.sidebar.selectbox("Vessel Operating Mode:", ["Open Pot (Constant Atmospheric Pressure)", "Closed Sealed Pot (Variable Pressure Buildup)"])
-    pot_volume = st.sidebar.number_input("Total Pot Vessel Volume (Liters)", value=200.0, step=10.0) / 1000.0  # convert to m³
+    pot_volume = st.sidebar.number_input("Total Pot Vessel Volume (Liters)", value=200.0, step=10.0) / 1000.0
     initial_pressure_atm = st.sidebar.number_input("Initial Vessel Pressure (atm)", value=1.0, step=0.1)
     heating_power_kw = st.sidebar.slider("Thermal Heating Power Input (kW)", 1.0, 100.0, 15.0)
 
-    st.sidebar.header("3. Condenser Settings (Optional)")
+    st.sidebar.header("4. Condenser Settings (Optional)")
     enable_condenser = st.sidebar.checkbox("Enable Overhead Condenser Surface", value=True)
     if enable_condenser:
         T_condenser = st.sidebar.slider("Condenser Wall Temp (°C)", 5.0, 60.0, 20.0)
         condenser_area = st.sidebar.slider("Condenser Surface Area (m²)", 0.1, 5.0, 1.0)
         h_condenser = st.sidebar.slider("Condensation Heat Transfer Coeff. (W/m²·K)", 100, 3000, 1000)
 
-    evap_time_min = st.sidebar.slider("Evaporation Simulation Time (minutes)", 1, 120, 30)
-
     if st.button("🧪 Run Evaporation & Concentration Model"):
-        time_steps = np.linspace(0, evap_time_min * 60.0, 300)
-        dt = time_steps[1] - time_steps[0]
+        # Determine target solvent mass if goal is target concentration
+        if calc_goal == "Find Time to Reach Target Concentration":
+            m_solv_target = m_other_0 * ((100.0 / target_conc_pct) - 1.0)
+            max_sec = max_timeout_min * 60.0
+            dt = 1.0  # 1-second time steps for target calculation
+            time_limit_steps = int(max_sec / dt)
+        else:
+            m_solv_target = -1.0
+            max_sec = evap_time_min * 60.0
+            dt = max_sec / 300.0
+            time_limit_steps = 300
 
-        # Tracking vectors
-        m_solv = np.zeros_like(time_steps)
-        m_solv[0] = m_volatile_0
-        concentration = np.zeros_like(time_steps)
-        concentration[0] = (m_other_0 / total_initial_mass) * 100.0
-        pressure_kPa = np.zeros_like(time_steps)
-        pressure_kPa[0] = initial_pressure_atm * 101.325
-        boiling_temp = np.zeros_like(time_steps)
+        # Arrays for recording dynamics
+        t_list, m_solv_list, conc_list, press_list, boil_list = [], [], [], [], []
 
-        # Initial liquid & headspace volume calculation
+        m_curr = m_volatile_0
         density_liq = 1000.0 if solvent_key == "Water" else 789.0
         v_liq_0 = total_initial_mass / density_liq
         v_headspace = max(0.01, pot_volume - v_liq_0)
-
-        # Vapor mole tracking inside headspace for closed pot
-        n_vapor = (pressure_kPa[0] * 1000.0 * v_headspace) / (R_GAS * (25.0 + 273.15))
 
         antoine_params = ANTOINE[solvent_key]
         L_v = antoine_params["L_v"]
         M_molar = antoine_params["MolarMass"]
 
-        for t_i in range(1, len(time_steps)):
-            # Antoine inverted: T_boil = B / (A - log10(P_kPa)) - C
-            P_curr_kPa = max(1.0, pressure_kPa[t_i-1])
-            T_b = (antoine_params["B"] / (antoine_params["A"] - np.log10(P_curr_kPa))) - antoine_params["C"]
-            boiling_temp[t_i-1] = T_b
+        P_curr_kPa = initial_pressure_atm * 101.325
+        n_vapor = (P_curr_kPa * 1000.0 * v_headspace) / (R_GAS * (25.0 + 273.15))
 
-            # Evaporation rate from heat input: m_dot = Q / L_v (kg/s)
-            if m_solv[t_i-1] > 0.01:
-                evap_rate = (heating_power_kw * 1000.0) / L_v  # kg/s
-            else:
-                evap_rate = 0.0
+        target_reached = False
+        final_time_sec = 0.0
 
-            # Condensation rate calculation
+        for step in range(time_limit_steps):
+            current_time_sec = step * dt
+            
+            # Antoine equation for boiling point
+            T_b = (antoine_params["B"] / (antoine_params["A"] - np.log10(max(1.0, P_curr_kPa)))) - antoine_params["C"]
+
+            # Evaporation rate
+            evap_rate = (heating_power_kw * 1000.0) / L_v if m_curr > 0.001 else 0.0
+
+            # Condensation rate
             cond_rate = 0.0
             if enable_condenser and evap_rate > 0:
                 q_cond = h_condenser * condenser_area * max(0.0, T_b - T_condenser)
                 cond_rate = min(evap_rate, q_cond / L_v)
 
-            net_mass_lost = (evap_rate - cond_rate) * dt
-            m_solv[t_i] = max(0.0, m_solv[t_i-1] - net_mass_lost)
+            net_evap = (evap_rate - cond_rate) * dt
+            m_curr = max(0.0, m_curr - net_evap)
 
-            total_m_now = m_solv[t_i] + m_other_0
-            concentration[t_i] = (m_other_0 / total_m_now) * 100.0 if total_m_now > 0 else 100.0
+            curr_total = m_curr + m_other_0
+            curr_conc = (m_other_0 / curr_total) * 100.0 if curr_total > 0 else 100.0
 
-            # Pressure dynamics
+            # Pressure update
             if vessel_type == "Open Pot (Constant Atmospheric Pressure)":
-                pressure_kPa[t_i] = initial_pressure_atm * 101.325
+                P_curr_kPa = initial_pressure_atm * 101.325
             else:
-                # Sealed closed vessel pressure accumulation
                 dn_vapor = ((evap_rate - cond_rate) * dt) / M_molar
                 n_vapor += dn_vapor
-                T_vapor_K = T_b + 273.15
-                pressure_kPa[t_i] = (n_vapor * R_GAS * T_vapor_K) / (v_headspace * 1000.0)
+                P_curr_kPa = (n_vapor * R_GAS * (T_b + 273.15)) / (v_headspace * 1000.0)
 
-        boiling_temp[-1] = boiling_temp[-2]
+            t_list.append(current_time_sec / 60.0)
+            m_solv_list.append(m_curr)
+            conc_list.append(curr_conc)
+            press_list.append(P_curr_kPa)
+            boil_list.append(T_b)
 
-        st.session_state.m_solv = m_solv
-        st.session_state.concentration = concentration
-        st.session_state.pressure_kPa = pressure_kPa
-        st.session_state.boiling_temp = boiling_temp
-        st.session_state.time_min = time_steps / 60.0
-        st.session_state.m_other_0 = m_other_0
+            if calc_goal == "Find Time to Reach Target Concentration" and m_curr <= m_solv_target:
+                target_reached = True
+                final_time_sec = current_time_sec
+                break
+
+        st.session_state.m_solv = np.array(m_solv_list)
+        st.session_state.concentration = np.array(conc_list)
+        st.session_state.pressure_kPa = np.array(press_list)
+        st.session_state.boiling_temp = np.array(boil_list)
+        st.session_state.time_min = np.array(t_list)
         st.session_state.solvent_key = solvent_key
+        st.session_state.calc_goal = calc_goal
+        st.session_state.target_reached = target_reached
+        st.session_state.final_time_min = final_time_sec / 60.0
+        st.session_state.target_conc_pct = target_conc_pct if calc_goal == "Find Time to Reach Target Concentration" else 0.0
 
     if "m_solv" in st.session_state:
         time_min = st.session_state.time_min
@@ -434,21 +466,28 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
         boiling_temp = st.session_state.boiling_temp
         solv_key = st.session_state.solvent_key
 
+        if st.session_state.calc_goal == "Find Time to Reach Target Concentration":
+            if st.session_state.target_reached:
+                st.success(f"🎯 **Target Concentration of {st.session_state.target_conc_pct:.1f}% reached in {st.session_state.final_time_min:.2f} minutes!**")
+            else:
+                st.error(f"⚠️ Target concentration was not reached within the safety limit ({time_min[-1]:.0f} min). Try increasing heating power.")
+
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Final Dry Solids %", f"{concentration[-1]:.1f} %")
+        c1.metric("Final Concentration", f"{concentration[-1]:.1f} %")
         c2.metric(f"Remaining {solv_key}", f"{m_solv[-1]:.1f} kg")
         c3.metric("Final Vessel Pressure", f"{pressure_kPa[-1]/101.325:.2f} atm")
         c4.metric("Boiling Point at Pressure", f"{boiling_temp[-1]:.1f} °C")
 
         st.divider()
-
         res_col1, res_col2 = st.columns(2)
 
         with res_col1:
             fig1, ax1 = plt.subplots(figsize=(6, 4))
             ax1.plot(time_min, concentration, color="darkgreen", linewidth=2.5, label="Solids Concentration (%)")
+            if st.session_state.calc_goal == "Find Time to Reach Target Concentration":
+                ax1.axhline(st.session_state.target_conc_pct, color="red", linestyle="--", label=f"Target ({st.session_state.target_conc_pct:.1f}%)")
             ax1.set_xlabel("Time (minutes)")
-            ax1.set_ylabel("Non-Volatile Concentration (% Brix/Solids)", color="darkgreen")
+            ax1.set_ylabel("Non-Volatile Concentration (%)", color="darkgreen")
             ax1.grid(True, linestyle="--", alpha=0.5)
             
             ax1_twin = ax1.twinx()
@@ -456,6 +495,7 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
             ax1_twin.set_ylabel(f"Mass of {solv_key} (kg)", color="blue")
             
             ax1.set_title("Product Concentration vs. Solvent Evaporation", fontsize=11)
+            ax1.legend(loc="upper left")
             st.pyplot(fig1)
 
         with res_col2:
