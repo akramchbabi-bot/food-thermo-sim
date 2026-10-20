@@ -290,6 +290,12 @@ if app_mode == "1. Transient Heat Transfer & Penetration":
 
             ax1.axvline(selected_time, color='black', linestyle='--', linewidth=2, label="Current Timestamp")
             ax1.axhline(100, color='red', linestyle=':', alpha=0.7, label="Boiling Point (100°C)")
+
+            # Explicit bounds starting from 0 to max needed
+            max_temp_val = max(110.0, float(np.max(solution.y)) * 1.05)
+            ax1.set_xlim(left=0, right=max(time_min[-1], 0.1))
+            ax1.set_ylim(bottom=0, top=max_temp_val)
+
             ax1.set_xlabel("Time (minutes)", fontsize=10)
             ax1.set_ylabel("Temperature (°C)", fontsize=10)
             ax1.set_title(f"Thermal Profile Curves", fontsize=11)
@@ -306,8 +312,8 @@ if app_mode == "1. Transient Heat Transfer & Penetration":
             )
             cmap.set_bad(color="#0e1117")
 
-            max_temp_bound = max(150.0, float(np.max(solution.y)))
-            im = ax2.imshow(pixel_grid, cmap=cmap, vmin=T_init_val, vmax=max_temp_bound, interpolation='nearest')
+            max_temp_bound = max(150.0, float(np.max(solution.y)) * 1.05)
+            im = ax2.imshow(pixel_grid, cmap=cmap, vmin=0, vmax=max_temp_bound, interpolation='nearest')
             ax2.set_title(f"🔴 Pixel Art Cross-Section at t = {selected_time:.2f} min", fontsize=11)
             ax2.axis('off')
             
@@ -452,7 +458,6 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
         st.session_state.final_time_min = final_time_sec / 60.0
         st.session_state.target_conc_pct = target_conc_pct if calc_goal == "Find Time to Reach Target Concentration" else 0.0
 
-    # Safe display handling using .get() to prevent KeyError on re-runs
     if "m_solv" in st.session_state and st.session_state.get("m_solv") is not None:
         time_min = st.session_state.get("time_min")
         m_solv = st.session_state.get("m_solv")
@@ -485,26 +490,42 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
             ax1.set_xlabel("Time (minutes)")
             ax1.set_ylabel("Non-Volatile Concentration (%)", color="darkgreen")
             ax1.grid(True, linestyle="--", alpha=0.5)
-            
+
+            # Explicit bounds starting from 0 to max needed
+            max_conc_val = max(100.0, float(np.max(concentration)) * 1.05)
+            ax1.set_xlim(left=0, right=max(time_min[-1], 0.1))
+            ax1.set_ylim(bottom=0, top=max_conc_val)
+
             ax1_twin = ax1.twinx()
             ax1_twin.plot(time_min, m_solv, color="blue", linestyle="--", linewidth=2, label=f"{solv_key} Mass (kg)")
             ax1_twin.set_ylabel(f"Mass of {solv_key} (kg)", color="blue")
             
+            max_mass_val = max(10.0, float(np.max(m_solv)) * 1.05)
+            ax1_twin.set_ylim(bottom=0, top=max_mass_val)
+
             ax1.set_title("Product Concentration vs. Solvent Evaporation", fontsize=11)
             ax1.legend(loc="upper left")
             st.pyplot(fig1)
 
         with res_col2:
             fig2, ax2 = plt.subplots(figsize=(6, 4))
-            ax2.plot(time_min, pressure_kPa / 101.325, color="crimson", linewidth=2.5, label="Vessel Pressure (atm)")
+            press_atm = pressure_kPa / 101.325
+            ax2.plot(time_min, press_atm, color="crimson", linewidth=2.5, label="Vessel Pressure (atm)")
             ax2.set_xlabel("Time (minutes)")
             ax2.set_ylabel("Pressure (atm)", color="crimson")
             ax2.grid(True, linestyle="--", alpha=0.5)
 
+            # Explicit bounds starting from 0 to max needed
+            max_press_val = max(1.5, float(np.max(press_atm)) * 1.05)
+            ax2.set_xlim(left=0, right=max(time_min[-1], 0.1))
+            ax2.set_ylim(bottom=0, top=max_press_val)
+
             ax2_twin = ax2.twinx()
             ax2_twin.plot(time_min, boiling_temp, color="orange", linestyle="-.", linewidth=2, label="Boiling Point (°C)")
             ax2_twin.set_ylabel("Liquid Boiling Temp (°C)", color="orange")
+            
+            max_boil_val = max(110.0, float(np.max(boiling_temp)) * 1.05)
+            ax2_twin.set_ylim(bottom=0, top=max_boil_val)
 
             ax2.set_title("Vessel Pressure & Shifted Boiling Point", fontsize=11)
             st.pyplot(fig2)
-            
