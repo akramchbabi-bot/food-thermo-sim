@@ -580,3 +580,4 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
             ax2.set_title("Vessel Pressure & Cumulative Energy (kWh)", fontsize=11)
             ax2.legend(loc="upper left")
             st.pyplot(fig2)
+            
