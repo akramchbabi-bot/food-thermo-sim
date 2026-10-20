@@ -16,8 +16,8 @@ T_BOIL_ETHANOL = 78.37
 DT_BOIL = 2.0           
 
 ANTOINE = {
-    "Water": {"A": 7.19621, "B": 1730.63, "C": 233.426, "MolarMass": 0.018015, "L_v": 2.26e6},
-    "Ethanol": {"A": 7.33827, "B": 1642.89, "C": 230.300, "MolarMass": 0.04607, "L_v": 8.41e5}
+    "Water": {"A": 7.19621, "B": 1730.63, "C": 233.426, "MolarMass": 0.018015, "L_v": 2.26e6, "Cp": 4184.0},
+    "Ethanol": {"A": 7.33827, "B": 1642.89, "C": 230.300, "MolarMass": 0.04607, "L_v": 8.41e5, "Cp": 2440.0}
 }
 
 st.sidebar.title("🛠️ Navigation")
@@ -373,7 +373,7 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
         dynamic_boiling = st.sidebar.checkbox(
             "Enable Pressure-Dependent Boiling Temperature (Antoine Equation)", 
             value=True, 
-            help="When checked, boiling temperature increases as pressure builds up."
+            help="When enabled, rising pressure increases boiling temp, diverting power to sensible heating and increasing heat losses."
         )
 
     st.sidebar.header("4. Heating Energy Input (kW)")
@@ -386,7 +386,7 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
         condenser_area = st.sidebar.slider("Condenser Surface Area (m²)", 0.05, 2.0, 0.2)
         h_condenser = st.sidebar.slider("Condensation Heat Transfer Coeff. (W/m²·K)", 100, 3000, 500)
 
-    # --- REAL-TIME CALCULATION LOOP (Executes automatically as inputs change) ---
+    # --- REAL-TIME CALCULATION LOOP ---
     if calc_goal == "Find Time to Reach Target Concentration":
         m_solv_target = m_other_0 * ((100.0 / target_conc_pct) - 1.0)
         max_sec = max_timeout_min * 60.0
@@ -406,8 +406,9 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
     v_headspace = max(0.01, pot_volume - v_liq_0)
 
     antoine_params = ANTOINE[solvent_key]
-    L_v = antoine_params["L_v"]
+    L_v_0 = antoine_params["L_v"]
     M_molar = antoine_params["MolarMass"]
+    cp_liq = antoine_params["Cp"]
 
     P_curr_kPa = initial_pressure_atm * 101.325
     n_vapor = (P_curr_kPa * 1000.0 * v_headspace) / (R_GAS * (25.0 + 273.15))
@@ -416,21 +417,47 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
     final_time_sec = 0.0
     cum_energy_kwh = 0.0
 
+    T_b_prev = 100.0 if solvent_key == "Water" else 78.37
+    U_loss = 15.0  # Outer pot wall thermal loss coefficient (W/m²·K)
+    A_surface = max(0.5, 6.0 * (pot_volume ** (2.0 / 3.0)))
+
     for step in range(time_limit_steps):
         current_time_sec = step * dt
         
         if vessel_type == "Closed Sealed Pot (Variable Pressure Buildup)" and dynamic_boiling:
             denom = antoine_params["A"] - np.log10(max(1.0, P_curr_kPa))
             if denom <= 0.05:
-                T_b = 374.0  # Safety cap at critical point of water
+                T_b = 374.0
             else:
                 T_b = min(374.0, (antoine_params["B"] / denom) - antoine_params["C"])
         else:
             denom = antoine_params["A"] - np.log10(max(1.0, initial_pressure_atm * 101.325))
             T_b = (antoine_params["B"] / denom) - antoine_params["C"]
 
+        dT_b = max(0.0, T_b - T_b_prev)
+        T_b_prev = T_b
+
+        # Thermal Energy Balance
         Q_gross_watts = heating_power_kw * 1000.0
-        evap_rate = Q_gross_watts / L_v if m_curr > 0.001 else 0.0
+        
+        # Sensible heating drain required to warm liquid inventory to rising T_b
+        m_total_liq = m_curr + m_other_0
+        Q_sensible_watts = (m_total_liq * cp_liq * dT_b) / dt if dt > 0 else 0.0
+
+        # Ambient heat loss to surroundings (assume 20°C room)
+        Q_loss_watts = U_loss * A_surface * max(0.0, T_b - 20.0)
+
+        # Net power available for evaporation
+        Q_evap_watts = max(0.0, Q_gross_watts - Q_sensible_watts - Q_loss_watts)
+
+        # Latent heat adjustment with temperature (Watson relation)
+        T_crit = 374.14 if solvent_key == "Water" else 240.8
+        if T_b < T_crit - 5.0:
+            L_v_curr = L_v_0 * ((T_crit - T_b) / (T_crit - (100.0 if solvent_key == "Water" else 78.37))) ** 0.38
+        else:
+            L_v_curr = L_v_0 * 0.1
+
+        evap_rate = Q_evap_watts / L_v_curr if m_curr > 0.001 else 0.0
 
         step_kwh = (Q_gross_watts / 1000.0) * (dt / 3600.0)
         cum_energy_kwh += step_kwh
@@ -438,7 +465,7 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
         cond_rate = 0.0
         if enable_condenser and evap_rate > 0:
             q_cond = h_condenser * condenser_area * max(0.0, T_b - T_condenser)
-            cond_rate = min(evap_rate, q_cond / L_v)
+            cond_rate = min(evap_rate, q_cond / L_v_curr)
 
         net_evap = max(0.0, (evap_rate - cond_rate) * dt)
         m_curr = max(0.0, m_curr - net_evap)
