@@ -440,4 +440,4 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
 
                     if enable_prv and (P_curr_kPa > prv_threshold_atm * 101.325):
                         P_curr_kPa = prv_threshold_atm * 101.325
-                        n_vapor = (P_curr_kPa * 1000.0 * v_headspace) / (R_GAS * (T_b + 273.
+                        n_vapor = (P_curr_kPa * 1000.0 * v_headspace) / (R_GAS * (T_b + 273.15))
