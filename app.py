@@ -16,7 +16,6 @@ T_BOIL_ETHANOL = 78.37  # Ethanol Boiling Point (°C)
 DT_BOIL = 2.0           # Phase change transition interval half-width (°C)
 
 # Antoine Equation Constants for Vapor Pressure (P in kPa, T in °C)
-# log10(P_kPa) = A - B / (T + C)
 ANTOINE = {
     "Water": {"A": 7.19621, "B": 1730.63, "C": 233.426, "MolarMass": 0.018015, "L_v": 2.26e6},
     "Ethanol": {"A": 7.33827, "B": 1642.89, "C": 230.300, "MolarMass": 0.04607, "L_v": 8.41e5}
@@ -43,7 +42,6 @@ if app_mode == "1. Transient Heat Transfer & Penetration":
     st.title("🍲 Food Physical Modeling & Heat Transfer Simulator")
     st.write("Simulate heat transfer (Conduction, Convection, Radiation, Phase Change) through food over time.")
 
-    # Session State for slider visibilities
     if "show_h_slider" not in st.session_state:
         st.session_state.show_h_slider = False
     if "show_h_contact_slider" not in st.session_state:
@@ -193,56 +191,57 @@ if app_mode == "1. Transient Heat Transfer & Penetration":
     cooking_time_min = st.sidebar.slider("Simulation Time (minutes)", 1, 60, 10)
 
     if st.button("🚀 Run Heat Transfer Simulation"):
-        k_init, cp_base_init, _ = get_food_properties(water_pct, protein_val, fat_val, carbs_val, ash_val, rho_val, T=T_init)
-        cp_eff_init = get_effective_cp(T_init, cp_base_init, water_pct, enable_phase_change)
-        alpha_init = k_init / (rho_val * cp_eff_init)
-        t_final = cooking_time_min * 60.0
-        
-        N = 25
-        x = np.linspace(0, L, N)
-        dx = x[1] - x[0]
-        
-        def heat_equation(t, T):
-            dTdt = np.zeros_like(T)
-            for i in range(1, N - 1):
-                k_i, cp_base_i, _ = get_food_properties(water_pct, protein_val, fat_val, carbs_val, ash_val, rho_val, T=T[i])
-                cp_eff_i = get_effective_cp(T[i], cp_base_i, water_pct, enable_phase_change)
-                alpha_i = k_i / (rho_val * cp_eff_i)
-                dTdt[i] = alpha_i * (T[i + 1] - 2 * T[i] + T[i - 1]) / (dx ** 2)
+        with st.spinner("⚡ Solving transient non-linear PDE... Please wait..."):
+            k_init, cp_base_init, _ = get_food_properties(water_pct, protein_val, fat_val, carbs_val, ash_val, rho_val, T=T_init)
+            cp_eff_init = get_effective_cp(T_init, cp_base_init, water_pct, enable_phase_change)
+            alpha_init = k_init / (rho_val * cp_eff_init)
+            t_final = cooking_time_min * 60.0
+            
+            N = 25
+            x = np.linspace(0, L, N)
+            dx = x[1] - x[0]
+            
+            def heat_equation(t, T):
+                dTdt = np.zeros_like(T)
+                for i in range(1, N - 1):
+                    k_i, cp_base_i, _ = get_food_properties(water_pct, protein_val, fat_val, carbs_val, ash_val, rho_val, T=T[i])
+                    cp_eff_i = get_effective_cp(T[i], cp_base_i, water_pct, enable_phase_change)
+                    alpha_i = k_i / (rho_val * cp_eff_i)
+                    dTdt[i] = alpha_i * (T[i + 1] - 2 * T[i] + T[i - 1]) / (dx ** 2)
+                    
+                q_surf_left = 0.0
+                q_surf_right = 0.0
+                if "Direct Contact" in mode:
+                    q_surf_left += h_contact * (T_surface_contact - T[0])
+                    q_surf_right += h_contact * (T_surface_contact - T[-1])
+                if "Convection" in mode:
+                    q_surf_left += h_val * (T_ambient - T[0])
+                    q_surf_right += h_val * (T_ambient - T[-1])
+                if "Radiation" in mode:
+                    T0_K, TN_K, Trad_K = T[0] + 273.15, T[-1] + 273.15, T_rad + 273.15
+                    q_surf_left += emissivity * SIGMA * (Trad_K**4 - T0_K**4)
+                    q_surf_right += emissivity * SIGMA * (Trad_K**4 - TN_K**4)
                 
-            q_surf_left = 0.0
-            q_surf_right = 0.0
-            if "Direct Contact" in mode:
-                q_surf_left += h_contact * (T_surface_contact - T[0])
-                q_surf_right += h_contact * (T_surface_contact - T[-1])
-            if "Convection" in mode:
-                q_surf_left += h_val * (T_ambient - T[0])
-                q_surf_right += h_val * (T_ambient - T[-1])
-            if "Radiation" in mode:
-                T0_K, TN_K, Trad_K = T[0] + 273.15, T[-1] + 273.15, T_rad + 273.15
-                q_surf_left += emissivity * SIGMA * (Trad_K**4 - T0_K**4)
-                q_surf_right += emissivity * SIGMA * (Trad_K**4 - TN_K**4)
-            
-            k_0, cp_b0, _ = get_food_properties(water_pct, protein_val, fat_val, carbs_val, ash_val, rho_val, T=T[0])
-            cp_e0 = get_effective_cp(T[0], cp_b0, water_pct, enable_phase_change)
-            k_N, cp_bN, _ = get_food_properties(water_pct, protein_val, fat_val, carbs_val, ash_val, rho_val, T=T[-1])
-            cp_eN = get_effective_cp(T[-1], cp_bN, water_pct, enable_phase_change)
-            
-            dTdt[0] = (2.0 / (rho_val * cp_e0 * dx)) * (q_surf_left + k_0 * (T[1] - T[0]) / dx)
-            dTdt[-1] = (2.0 / (rho_val * cp_eN * dx)) * (q_surf_right + k_N * (T[-2] - T[-1]) / dx)
-            return dTdt
+                k_0, cp_b0, _ = get_food_properties(water_pct, protein_val, fat_val, carbs_val, ash_val, rho_val, T=T[0])
+                cp_e0 = get_effective_cp(T[0], cp_b0, water_pct, enable_phase_change)
+                k_N, cp_bN, _ = get_food_properties(water_pct, protein_val, fat_val, carbs_val, ash_val, rho_val, T=T[-1])
+                cp_eN = get_effective_cp(T[-1], cp_bN, water_pct, enable_phase_change)
+                
+                dTdt[0] = (2.0 / (rho_val * cp_e0 * dx)) * (q_surf_left + k_0 * (T[1] - T[0]) / dx)
+                dTdt[-1] = (2.0 / (rho_val * cp_eN * dx)) * (q_surf_right + k_N * (T[-2] - T[-1]) / dx)
+                return dTdt
 
-        T0 = np.full(N, T_init)
-        t_eval = np.linspace(0, t_final, 200)
-        solution = solve_ivp(heat_equation, [0, t_final], T0, t_eval=t_eval, method='Radau')
+            T0 = np.full(N, T_init)
+            t_eval = np.linspace(0, t_final, 200)
+            solution = solve_ivp(heat_equation, [0, t_final], T0, t_eval=t_eval, method='Radau')
 
-        st.session_state.solution = solution
-        st.session_state.x_array = x
-        st.session_state.T_init = T_init
-        st.session_state.k_init = k_init
-        st.session_state.cp_base_init = cp_base_init
-        st.session_state.rho_val = rho_val
-        st.session_state.alpha_init = alpha_init
+            st.session_state.solution = solution
+            st.session_state.x_array = x
+            st.session_state.T_init = T_init
+            st.session_state.k_init = k_init
+            st.session_state.cp_base_init = cp_base_init
+            st.session_state.rho_val = rho_val
+            st.session_state.alpha_init = alpha_init
 
     if "solution" in st.session_state:
         solution = st.session_state.solution
@@ -291,7 +290,6 @@ if app_mode == "1. Transient Heat Transfer & Penetration":
             ax1.axvline(selected_time, color='black', linestyle='--', linewidth=2, label="Current Timestamp")
             ax1.axhline(100, color='red', linestyle=':', alpha=0.7, label="Boiling Point (100°C)")
 
-            # Explicit bounds starting from 0 to max needed
             max_temp_val = max(110.0, float(np.max(solution.y)) * 1.05)
             ax1.set_xlim(left=0, right=max(time_min[-1], 0.1))
             ax1.set_ylim(bottom=0, top=max_temp_val)
@@ -383,80 +381,81 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
         h_condenser = st.sidebar.slider("Condensation Heat Transfer Coeff. (W/m²·K)", 100, 3000, 1000)
 
     if st.button("🧪 Run Evaporation & Concentration Model"):
-        if calc_goal == "Find Time to Reach Target Concentration":
-            m_solv_target = m_other_0 * ((100.0 / target_conc_pct) - 1.0)
-            max_sec = max_timeout_min * 60.0
-            dt = 1.0
-            time_limit_steps = int(max_sec / dt)
-        else:
-            m_solv_target = -1.0
-            max_sec = evap_time_min * 60.0
-            dt = max_sec / 300.0
-            time_limit_steps = 300
-
-        t_list, m_solv_list, conc_list, press_list, boil_list = [], [], [], [], []
-
-        m_curr = m_volatile_0
-        density_liq = 1000.0 if solvent_key == "Water" else 789.0
-        v_liq_0 = total_initial_mass / density_liq
-        v_headspace = max(0.01, pot_volume - v_liq_0)
-
-        antoine_params = ANTOINE[solvent_key]
-        L_v = antoine_params["L_v"]
-        M_molar = antoine_params["MolarMass"]
-
-        P_curr_kPa = initial_pressure_atm * 101.325
-        n_vapor = (P_curr_kPa * 1000.0 * v_headspace) / (R_GAS * (25.0 + 273.15))
-
-        target_reached = False
-        final_time_sec = 0.0
-
-        for step in range(time_limit_steps):
-            current_time_sec = step * dt
-            
-            T_b = (antoine_params["B"] / (antoine_params["A"] - np.log10(max(1.0, P_curr_kPa)))) - antoine_params["C"]
-
-            evap_rate = (heating_power_kw * 1000.0) / L_v if m_curr > 0.001 else 0.0
-
-            cond_rate = 0.0
-            if enable_condenser and evap_rate > 0:
-                q_cond = h_condenser * condenser_area * max(0.0, T_b - T_condenser)
-                cond_rate = min(evap_rate, q_cond / L_v)
-
-            net_evap = (evap_rate - cond_rate) * dt
-            m_curr = max(0.0, m_curr - net_evap)
-
-            curr_total = m_curr + m_other_0
-            curr_conc = (m_other_0 / curr_total) * 100.0 if curr_total > 0 else 100.0
-
-            if vessel_type == "Open Pot (Constant Atmospheric Pressure)":
-                P_curr_kPa = initial_pressure_atm * 101.325
+        with st.spinner("⚡ Computing mass balance & phase thermodynamics..."):
+            if calc_goal == "Find Time to Reach Target Concentration":
+                m_solv_target = m_other_0 * ((100.0 / target_conc_pct) - 1.0)
+                max_sec = max_timeout_min * 60.0
+                dt = 1.0
+                time_limit_steps = int(max_sec / dt)
             else:
-                dn_vapor = ((evap_rate - cond_rate) * dt) / M_molar
-                n_vapor += dn_vapor
-                P_curr_kPa = (n_vapor * R_GAS * (T_b + 273.15)) / (v_headspace * 1000.0)
+                m_solv_target = -1.0
+                max_sec = evap_time_min * 60.0
+                dt = max_sec / 300.0
+                time_limit_steps = 300
 
-            t_list.append(current_time_sec / 60.0)
-            m_solv_list.append(m_curr)
-            conc_list.append(curr_conc)
-            press_list.append(P_curr_kPa)
-            boil_list.append(T_b)
+            t_list, m_solv_list, conc_list, press_list, boil_list = [], [], [], [], []
 
-            if calc_goal == "Find Time to Reach Target Concentration" and m_curr <= m_solv_target:
-                target_reached = True
-                final_time_sec = current_time_sec
-                break
+            m_curr = m_volatile_0
+            density_liq = 1000.0 if solvent_key == "Water" else 789.0
+            v_liq_0 = total_initial_mass / density_liq
+            v_headspace = max(0.01, pot_volume - v_liq_0)
 
-        st.session_state.m_solv = np.array(m_solv_list)
-        st.session_state.concentration = np.array(conc_list)
-        st.session_state.pressure_kPa = np.array(press_list)
-        st.session_state.boiling_temp = np.array(boil_list)
-        st.session_state.time_min = np.array(t_list)
-        st.session_state.solvent_key = solvent_key
-        st.session_state.calc_goal = calc_goal
-        st.session_state.target_reached = target_reached
-        st.session_state.final_time_min = final_time_sec / 60.0
-        st.session_state.target_conc_pct = target_conc_pct if calc_goal == "Find Time to Reach Target Concentration" else 0.0
+            antoine_params = ANTOINE[solvent_key]
+            L_v = antoine_params["L_v"]
+            M_molar = antoine_params["MolarMass"]
+
+            P_curr_kPa = initial_pressure_atm * 101.325
+            n_vapor = (P_curr_kPa * 1000.0 * v_headspace) / (R_GAS * (25.0 + 273.15))
+
+            target_reached = False
+            final_time_sec = 0.0
+
+            for step in range(time_limit_steps):
+                current_time_sec = step * dt
+                
+                T_b = (antoine_params["B"] / (antoine_params["A"] - np.log10(max(1.0, P_curr_kPa)))) - antoine_params["C"]
+
+                evap_rate = (heating_power_kw * 1000.0) / L_v if m_curr > 0.001 else 0.0
+
+                cond_rate = 0.0
+                if enable_condenser and evap_rate > 0:
+                    q_cond = h_condenser * condenser_area * max(0.0, T_b - T_condenser)
+                    cond_rate = min(evap_rate, q_cond / L_v)
+
+                net_evap = (evap_rate - cond_rate) * dt
+                m_curr = max(0.0, m_curr - net_evap)
+
+                curr_total = m_curr + m_other_0
+                curr_conc = (m_other_0 / curr_total) * 100.0 if curr_total > 0 else 100.0
+
+                if vessel_type == "Open Pot (Constant Atmospheric Pressure)":
+                    P_curr_kPa = initial_pressure_atm * 101.325
+                else:
+                    dn_vapor = ((evap_rate - cond_rate) * dt) / M_molar
+                    n_vapor += dn_vapor
+                    P_curr_kPa = (n_vapor * R_GAS * (T_b + 273.15)) / (v_headspace * 1000.0)
+
+                t_list.append(current_time_sec / 60.0)
+                m_solv_list.append(m_curr)
+                conc_list.append(curr_conc)
+                press_list.append(P_curr_kPa)
+                boil_list.append(T_b)
+
+                if calc_goal == "Find Time to Reach Target Concentration" and m_curr <= m_solv_target:
+                    target_reached = True
+                    final_time_sec = current_time_sec
+                    break
+
+            st.session_state.m_solv = np.array(m_solv_list)
+            st.session_state.concentration = np.array(conc_list)
+            st.session_state.pressure_kPa = np.array(press_list)
+            st.session_state.boiling_temp = np.array(boil_list)
+            st.session_state.time_min = np.array(t_list)
+            st.session_state.solvent_key = solvent_key
+            st.session_state.calc_goal = calc_goal
+            st.session_state.target_reached = target_reached
+            st.session_state.final_time_min = final_time_sec / 60.0
+            st.session_state.target_conc_pct = target_conc_pct if calc_goal == "Find Time to Reach Target Concentration" else 0.0
 
     if "m_solv" in st.session_state and st.session_state.get("m_solv") is not None:
         time_min = st.session_state.get("time_min")
@@ -491,7 +490,6 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
             ax1.set_ylabel("Non-Volatile Concentration (%)", color="darkgreen")
             ax1.grid(True, linestyle="--", alpha=0.5)
 
-            # Explicit bounds starting from 0 to max needed
             max_conc_val = max(100.0, float(np.max(concentration)) * 1.05)
             ax1.set_xlim(left=0, right=max(time_min[-1], 0.1))
             ax1.set_ylim(bottom=0, top=max_conc_val)
@@ -515,7 +513,6 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
             ax2.set_ylabel("Pressure (atm)", color="crimson")
             ax2.grid(True, linestyle="--", alpha=0.5)
 
-            # Explicit bounds starting from 0 to max needed
             max_press_val = max(1.5, float(np.max(press_atm)) * 1.05)
             ax2.set_xlim(left=0, right=max(time_min[-1], 0.1))
             ax2.set_ylim(bottom=0, top=max_press_val)
