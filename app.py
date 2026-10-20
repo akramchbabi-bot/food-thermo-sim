@@ -574,3 +574,85 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
         ax2.set_title("Vessel Pressure & Energy Consumption", fontsize=11)
         ax2.legend(loc="upper left")
         st.pyplot(fig2)
+
+    # --- NEW DYNAMIC POT SCHEMATIC ANIMATOR & SLIDER ---
+    st.divider()
+    st.subheader("🍲 Interactive Vessel Liquid/Solids State & Evaporation Visualizer")
+    
+    step_dt = float(time_min[1] - time_min[0]) if len(time_min) > 1 else 1.0
+    selected_evap_time = st.slider(
+        "Move slider to inspect liquid level and evaporated water over time:",
+        min_value=0.0,
+        max_value=float(time_min[-1]),
+        value=float(time_min[-1]),
+        step=max(0.1, step_dt)
+    )
+
+    evap_time_idx = np.argmin(np.abs(time_min - selected_evap_time))
+    cur_m_solv = m_solv[evap_time_idx]
+    cur_conc = concentration[evap_time_idx]
+    cur_press = pressure_kPa[evap_time_idx] / 101.325
+    cur_boil = boiling_temp[evap_time_idx]
+    
+    pct_removed = ((m_volatile_0 - cur_m_solv) / m_volatile_0) * 100.0 if m_volatile_0 > 0 else 0.0
+
+    pot_col1, pot_col2 = st.columns([1, 1.2])
+
+    with pot_col1:
+        st.markdown(f"### ⏱️ Timestamp: **{selected_evap_time:.2f} min**")
+        st.metric(f"Remaining {solvent_key}", f"{cur_m_solv:.1f} kg")
+        st.metric(f"{solvent_key} Removed", f"{pct_removed:.1f} %", delta=f"{m_volatile_0 - cur_m_solv:.1f} kg evaporated")
+        st.metric("Product Concentration", f"{cur_conc:.1f} % Solids")
+        st.metric("Current Vessel Pressure", f"{cur_press:.2f} atm")
+        st.metric("Current Boiling Temp", f"{cur_boil:.1f} °C")
+
+    with pot_col2:
+        fig_pot, ax_pot = plt.subplots(figsize=(6, 5))
+
+        # Volume estimation for layer proportions
+        vol_solv_L = cur_m_solv / (1.0 if solvent_key == "Water" else 0.789)
+        vol_solids_L = m_other_0 / 1.4  # Solids approx density 1.4 kg/L
+        vol_total_liq = vol_solv_L + vol_solids_L
+        v_pot_L = pot_volume * 1000.0
+
+        # Layer heights normalized to 100% pot height
+        h_solids_pct = min(95.0, (vol_solids_L / v_pot_L) * 100.0)
+        h_solv_pct = min(100.0 - h_solids_pct, (vol_solv_L / v_pot_L) * 100.0)
+        h_headspace_pct = max(0.0, 100.0 - h_solids_pct - h_solv_pct)
+
+        # 1. Dry Solids Layer (Bottom)
+        ax_pot.bar(0, h_solids_pct, width=1.4, bottom=0, color='#8B4513', edgecolor='black', linewidth=1.5, label=f'Dry Solids ({m_other_0:.1f} kg)')
+        
+        # 2. Water / Solvent Layer (Top of solids)
+        ax_pot.bar(0, h_solv_pct, width=1.4, bottom=h_solids_pct, color='#29B6F6', alpha=0.85, edgecolor='black', linewidth=1.5, label=f'Water ({cur_m_solv:.1f} kg)')
+        
+        # 3. Vapor Headspace (Top)
+        if h_headspace_pct > 0:
+            ax_pot.bar(0, h_headspace_pct, width=1.4, bottom=h_solids_pct + h_solv_pct, color='#ECEFF1', alpha=0.35, edgecolor='black', linestyle='--', label='Vapor Headspace')
+
+        # Pot Outer Walls
+        ax_pot.plot([-0.7, -0.7, 0.7, 0.7], [100, 0, 0, 100], color='#37474F', linewidth=4)
+        
+        # Pot Handles
+        ax_pot.plot([-0.7, -0.9, -0.9, -0.7], [80, 80, 60, 60], color='#37474F', linewidth=3)
+        ax_pot.plot([0.7, 0.9, 0.9, 0.7], [80, 80, 60, 60], color='#37474F', linewidth=3)
+
+        # Lid / PRV Top
+        if vessel_type == "Closed Sealed Pot (Variable Pressure Buildup)":
+            ax_pot.plot([-0.75, 0.75], [100, 100], color='#263238', linewidth=6)
+            if enable_prv:
+                ax_pot.plot([0, 0], [100, 108], color='red', linewidth=3)
+                ax_pot.plot([-0.1, 0.1], [108, 108], color='red', linewidth=5)
+                ax_pot.text(0.15, 104, f'PRV ({prv_threshold_atm:.1f} atm)', color='red', fontsize=8, fontweight='bold')
+        
+        # Heater Element / Flame
+        ax_pot.plot([-0.6, 0.6], [-5, -5], color='orange', linewidth=6)
+        ax_pot.text(0, -12, f"🔥 Heating Power: {heating_power_kw:.1f} kW", ha='center', va='center', color='darkorange', fontweight='bold', fontsize=9)
+
+        ax_pot.set_xlim(-1.2, 1.6)
+        ax_pot.set_ylim(-18, 118)
+        ax_pot.axis('off')
+        ax_pot.set_title(f"Cross-Section Vessel State at t = {selected_evap_time:.2f} min", fontsize=11, fontweight='bold')
+        ax_pot.legend(loc='upper right', bbox_to_anchor=(1.4, 1.0), fontsize=8)
+        
+        st.pyplot(fig_pot)
