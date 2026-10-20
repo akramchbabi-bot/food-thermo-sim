@@ -7,23 +7,19 @@ import matplotlib.colors as mcolors
 st.set_page_config(page_title="Food & Industrial Process Simulator", layout="wide")
 
 # Physics Constants
-SIGMA = 5.670374419e-8  # Stefan-Boltzmann Constant (W/m²·K⁴)
-L_V_WATER = 2.26e6      # Latent Heat of Vaporization of Water (J/kg)
-L_V_ETHANOL = 8.41e5    # Latent Heat of Vaporization of Ethanol (J/kg)
-R_GAS = 8.314           # Universal Gas Constant (J/mol·K)
-T_BOIL_WATER = 100.0    # Water Boiling Point (°C)
-T_BOIL_ETHANOL = 78.37  # Ethanol Boiling Point (°C)
-DT_BOIL = 2.0           # Phase change transition interval half-width (°C)
+SIGMA = 5.670374419e-8  
+L_V_WATER = 2.26e6      
+L_V_ETHANOL = 8.41e5    
+R_GAS = 8.314           
+T_BOIL_WATER = 100.0    
+T_BOIL_ETHANOL = 78.37  
+DT_BOIL = 2.0           
 
-# Antoine Equation Constants for Vapor Pressure (P in kPa, T in °C)
 ANTOINE = {
     "Water": {"A": 7.19621, "B": 1730.63, "C": 233.426, "MolarMass": 0.018015, "L_v": 2.26e6},
     "Ethanol": {"A": 7.33827, "B": 1642.89, "C": 230.300, "MolarMass": 0.04607, "L_v": 8.41e5}
 }
 
-# =====================================================================
-# GLOBAL NAVIGATION & MODULE SELECTION
-# =====================================================================
 st.sidebar.title("🛠️ Navigation")
 app_mode = st.sidebar.radio(
     "Select Simulator Module:",
@@ -35,9 +31,6 @@ app_mode = st.sidebar.radio(
 
 st.sidebar.divider()
 
-# =====================================================================
-# MODULE 1: TRANSIENT HEAT TRANSFER & PENETRATION SIMULATOR
-# =====================================================================
 if app_mode == "1. Transient Heat Transfer & Penetration":
     st.title("🍲 Food Physical Modeling & Heat Transfer Simulator")
     st.write("Simulate heat transfer (Conduction, Convection, Radiation, Phase Change) through food over time.")
@@ -247,7 +240,6 @@ if app_mode == "1. Transient Heat Transfer & Penetration":
         solution = st.session_state.solution
         x = st.session_state.x_array
         N = len(x)
-        T_init_val = st.session_state.get("T_init", 5.0)
         
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Thermal Conductivity (k)", f"{st.session_state.k_init:.3f} W/m·K")
@@ -319,9 +311,6 @@ if app_mode == "1. Transient Heat Transfer & Penetration":
             cbar.set_label("Temperature (°C)", fontsize=9)
             st.pyplot(fig2)
 
-# =====================================================================
-# MODULE 2: INDUSTRIAL EVAPORATION & CONCENTRATION CALCULATOR
-# =====================================================================
 elif app_mode == "2. Evaporation & Concentration Thermodynamics":
     st.title("⚗️ Evaporation & Product Concentration Thermodynamics")
     st.write("Model liquid mass reduction, vapor accumulation, boiling point changes, and thermal energy usage.")
@@ -436,10 +425,8 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
             for step in range(time_limit_steps):
                 current_time_sec = step * dt
                 
-                # Antoine equation for current boiling point at local pressure
                 T_b = (antoine_params["B"] / (antoine_params["A"] - np.log10(max(1.0, P_curr_kPa)))) - antoine_params["C"]
 
-                # Calculate Gross Heat Flux and Boiling Rate
                 if heating_mode == "Pressure-Coupled Driving Force (Q = U·A·ΔT)":
                     delta_T = max(0.0, T_heating - T_b)
                     Q_gross_watts = U_heating * A_heating * delta_T
@@ -448,11 +435,9 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
 
                 evap_rate = Q_gross_watts / L_v if m_curr > 0.001 else 0.0
 
-                # Cumulative Thermal Energy Tracking (kWh)
                 step_kwh = (Q_gross_watts / 1000.0) * (dt / 3600.0)
                 cum_energy_kwh += step_kwh
 
-                # Calculate Condensation Rate
                 cond_rate = 0.0
                 if enable_condenser and evap_rate > 0:
                     q_cond = h_condenser * condenser_area * max(0.0, T_b - T_condenser)
@@ -464,7 +449,6 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
                 curr_total = m_curr + m_other_0
                 curr_conc = (m_other_0 / curr_total) * 100.0 if curr_total > 0 else 100.0
 
-                # Pressure & PRV Clamping Logic
                 if vessel_type == "Open Pot (Constant Atmospheric Pressure)":
                     P_curr_kPa = initial_pressure_atm * 101.325
                 else:
@@ -472,7 +456,6 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
                     n_vapor += dn_vapor
                     P_curr_kPa = (n_vapor * R_GAS * (T_b + 273.15)) / (v_headspace * 1000.0)
 
-                    # PRV Activation Clamping
                     if enable_prv and (P_curr_kPa > prv_threshold_atm * 101.325):
                         P_curr_kPa = prv_threshold_atm * 101.325
                         n_vapor = (P_curr_kPa * 1000.0 * v_headspace) / (R_GAS * (T_b + 273.15))
@@ -505,7 +488,13 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
             st.session_state.vessel_type = vessel_type
             st.session_state.m_volatile_0 = m_volatile_0
 
-    if "m_solv" in st.session_state and st.session_state.get("m_solv") is not None:
+    if ("m_solv" in st.session_state and 
+        st.session_state.get("m_solv") is not None and 
+        len(st.session_state.get("m_solv")) > 0 and
+        "energy_kwh" in st.session_state and 
+        st.session_state.get("energy_kwh") is not None and 
+        len(st.session_state.get("energy_kwh")) > 0):
+        
         time_min = st.session_state.get("time_min")
         m_solv = st.session_state.get("m_solv")
         concentration = st.session_state.get("concentration")
@@ -515,8 +504,13 @@ elif app_mode == "2. Evaporation & Concentration Thermodynamics":
         solv_key = st.session_state.get("solvent_key", "Water")
         current_calc_goal = st.session_state.get("calc_goal", "Simulate Fixed Time Duration")
 
-        evaporated_kg = st.session_state.get("m_volatile_0", m_solv[0]) - m_solv[-1]
-        specific_energy = (energy_kwh[-1] / evaporated_kg) if evaporated_kg > 0 else 0.0
+        m_vol_0 = st.session_state.get("m_volatile_0", m_solv[0])
+        evaporated_kg = m_vol_0 - m_solv[-1]
+        
+        if evaporated_kg > 0:
+            specific_energy = energy_kwh[-1] / evaporated_kg
+        else:
+            specific_energy = 0.0
 
         if current_calc_goal == "Find Time to Reach Target Concentration":
             if st.session_state.get("target_reached", False):
